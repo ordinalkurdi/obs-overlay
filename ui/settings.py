@@ -34,7 +34,7 @@ class SettingsDialog(QDialog):
         bl = QHBoxLayout(); bl.addStretch(); bl.addWidget(cancel); bl.addWidget(ok)
         root = QVBoxLayout(self); root.addLayout(lay, 1); root.addLayout(bl)
         for name, fn in (("General", self._general), ("OBS connection", self._obs), ("Recording & replay", self._capture),
-                         ("Gallery & screenshots", self._gallery), ("Statistics", self._stats), ("Hotkeys", self._hotkeys),
+                         ("Gallery & screenshots", self._gallery), ("Widgets", self._stats), ("Hotkeys", self._hotkeys),
                          ("Privacy", self._privacy), ("Advanced", self._advanced)):
             form = QFormLayout(); form.setRowWrapPolicy(QFormLayout.WrapAllRows); w = QWidget(); w.setLayout(form)
             sc = QScrollArea(); sc.setWidgetResizable(True); sc.setFrameShape(QFrame.NoFrame); sc.setWidget(w)
@@ -145,15 +145,12 @@ class SettingsDialog(QDialog):
         self._note(f, "Screenshots capture the OBS scene output only.")
 
     def _stats(self, f):
-        self._check(f, "Show statistics overlay", "stats_visible")
-        self._combo(f, "Corner", "stats_corner", ["top-right", "top-left", "bottom-right", "bottom-left"])
-        self._spin(f, "Update interval (ms)", "stats_interval_ms", 500, 10000, 100); self._spin(f, "Opacity", "stats_opacity", 0.3, 1.0, 0.05, True)
-        self._spin(f, "Warn: dropped frames %", "stats_warn_dropped_pct", 0, 100, 0.5, True); self._spin(f, "Warn: system CPU %", "stats_warn_cpu_pct", 10, 100, 5, True)
-        boxes = {}
-        for k, lab in METRICS.items():
-            c = QCheckBox(); c.setChecked(k in self.cfg["stats_metrics"]); boxes[k] = c; self._add(f, lab, c)
-        self.getters["stats_metrics"] = lambda: [k for k, c in boxes.items() if c.isChecked()]
-        self._note(f, "OBS-process CPU and GPU usage/temperature are not exposed by this build and are shown as Unavailable (not invented).")
+        self._check(f, "Show floating widgets", "stats_visible", "Master switch for all statistic widgets")
+        self._spin(f, "Update interval (ms)", "stats_interval_ms", 500, 10000, 100)
+        self._spin(f, "Warn: dropped frames %", "stats_warn_dropped_pct", 0, 100, 0.5, True)
+        self._spin(f, "Warn: system CPU %", "stats_warn_cpu_pct", 10, 100, 5, True)
+        self._note(f, "Add, resize, pin and make widgets click-through from the overlay (Widgets row), or right-click a widget. "
+                      "OBS-process CPU and GPU usage/temperature are not exposed by this build and are shown as Unavailable.")
 
     def _hotkeys(self, f):
         self.keys: dict[str, QKeySequenceEdit] = {}

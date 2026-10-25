@@ -111,7 +111,7 @@ class Overlay(QWidget):
         super().__init__()
         self.svc, self.cfg, self.store, self.hints = svc, svc.cfg, store, hotkey_hints
         self.pinned = False; self._drag: QPoint | None = None; self._preview_on = False
-        self._open = False; self._gallery = None; self._settings = None
+        self._open = False; self._gallery = None; self._settings = None; self._widgets = None
         self.setWindowTitle("OBS OVERLAY"); self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.StrongFocus)
         self._build()
@@ -188,7 +188,7 @@ class Overlay(QWidget):
         hv.addWidget(self.mic); hv.addWidget(self.desk); hv.addWidget(self.mix)
         self.mixer = QWidget(); self.ml = QVBoxLayout(self.mixer); self.ml.setContentsMargins(46, 0, 16, 4); self.mixer.setVisible(False)
         hv.addWidget(self.mixer); hv.addWidget(separator())
-        self.stat_row = Row("chart-box-outline", "Statistics", "", tooltip="Toggle statistics overlay"); hv.addWidget(self.stat_row)
+        self.stat_row = Row("view-dashboard-outline", "Widgets", "", tooltip="Add and customize floating widgets (stats, web docks)"); hv.addWidget(self.stat_row)
         self.gallery_btn_hint = None
         self.footer = QLabel(); self.footer.setObjectName("dim"); self.footer.setContentsMargins(16, 6, 16, 0); self.footer.setWordWrap(True)
         hv.addWidget(self.footer)
@@ -320,6 +320,9 @@ class Overlay(QWidget):
     def set_gallery(self, w):
         self._gallery = w; self.stack.addWidget(w)
 
+    def set_widgets_page(self, w):
+        self._widgets = w; self.stack.addWidget(w)
+
     def set_settings_page(self, w):
         self.drop_settings(go_home=False); self._settings = w; self.stack.addWidget(w); self.show_page("settings")
 
@@ -331,6 +334,7 @@ class Overlay(QWidget):
     def show_page(self, name):
         if name == "gallery" and self._gallery: self.stack.setCurrentWidget(self._gallery); t = "GALLERY"
         elif name == "settings" and self._settings: self.stack.setCurrentWidget(self._settings); t = "SETTINGS"
+        elif name == "widgets" and self._widgets: self.stack.setCurrentWidget(self._widgets); t = "WIDGETS"
         else: self.stack.setCurrentIndex(0); t = "OBS OVERLAY"
         self.title.setText(t); self.back.setVisible(t != "OBS OVERLAY")
 
@@ -477,7 +481,7 @@ class Overlay(QWidget):
         self._role(self.mic, s.get("mic"), inp, "microphone", "microphone-off", "No microphone source in OBS", "mic_mute")
         self._role(self.desk, s.get("desktop"), inp, "volume-high", "volume-off", "No desktop audio source in OBS", "desktop_mute")
         self._mixer(s.get("inputs", []))
-        self.stat_row.set_texts(sub="On" if self.cfg["stats_visible"] else "Off")
+        self.stat_row.set_texts(sub=("On" if self.cfg["stats_visible"] else "Off") + " - floating stats and web docks")
         items = s.get("items", []); self._sources(items)
         self.src_row.set_texts(sub=f"{len(items)} in '{s.get('scene', '')}'" if ok else "Not connected")
         self.src_row.set_right_icon("chevron-down" if self.srcbox.isVisible() else "chevron-right", FG_DIM)

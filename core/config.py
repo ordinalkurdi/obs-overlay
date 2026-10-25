@@ -26,7 +26,8 @@ HOTKEY_LABELS = {
     "screenshot": "Screenshot (OBS scene)",
     "mic_mute": "Toggle microphone mute",
     "desktop_mute": "Toggle desktop audio mute",
-    "stats": "Toggle statistics overlay",
+    "stats": "Show / hide floating widgets",
+    "widgets_click": "Toggle click-through for all widgets",
 }
 
 DEFAULTS: dict = {
@@ -72,7 +73,8 @@ DEFAULTS: dict = {
     "favorites": [],
     "preview_fps": 1,
     "preview_width": 320,
-    "stats_visible": False,
+    "stats_visible": False,        # master switch for all floating widgets
+    "widgets": [],                 # list of widget dicts (see ui/widgets_dock.py)
     "stats_metrics": ["recording", "streaming", "bitrate", "dropped", "resolution", "fps",
                       "cpu", "memory", "replay", "connection"],
     "stats_interval_ms": 1000,
@@ -84,7 +86,7 @@ DEFAULTS: dict = {
     "hotkeys": {
         "toggle_overlay": "Alt+Z", "record": "Alt+F9", "replay_toggle": "Alt+Shift+F10",
         "replay_save": "Alt+F10", "screenshot": "Alt+F1", "mic_mute": "Ctrl+Alt+M",
-        "desktop_mute": "Ctrl+Alt+D", "stats": "Alt+R",
+        "desktop_mute": "Ctrl+Alt+D", "stats": "Alt+R", "widgets_click": "Alt+Shift+W",
     },
 }
 
