@@ -1,121 +1,270 @@
-# OBS Overlay
+# 🎮 OBS Overlay — OBS Control Without Leaving Your Game
 
-A slide-out, always-on-top control panel for **OBS Studio**, inspired by the in-game overlay of GPU vendor apps.
-Dock it to the edge of a monitor, pop it open with a hotkey while you play, and control OBS without leaving the game.
+**Your OBS control panel. On your screen. Out of your way.** 🗿
 
-Built with Python, PySide6 and the OBS WebSocket protocol (v5, built into OBS 28+).
+A slide-out, always-on-top control panel for **OBS Studio**, inspired by slick GPU vendor in-game overlays. Dock it to your monitor's edge, pop it open with a hotkey, and control OBS without alt-tabbing like it's 2009. 💀
 
-> **Status: early alpha.** Developed mainly for Windows. Expect rough edges; bug reports are welcome.
+> 🚧 **Status: Early Alpha**
+>
+> Windows is the main target. Expect rough edges, weird bugs, and occasional skill issues. Bug reports and contributions are welcome!
 
-## Features
+---
 
-**Capture**
-- Record / stop, pause / resume, with live timer and file size
-- Instant Replay using the OBS Replay Buffer, plus Save replay
-- Screenshot of the OBS scene output
-- Start / stop streaming with live duration, bitrate and dropped frames (stream key is never shown)
-- Virtual camera toggle
+## ✨ Features
 
-**Production**
-- Scene switching that stays in sync with OBS
-- Sources list for the current scene: show / hide and lock / unlock each source
-- Microphone and desktop audio mute, plus a volume mixer for all audio sources
-- Scene snapshot preview (updates about once per second, not live video)
+### 🎥 Capture — Get That Content
 
-**Gallery and player**
-- Recent-captures strip and a full gallery that scans your capture folder recursively (per-game and replay subfolders)
-- Search, filter (recordings / clips / screenshots / favorites), sort, lazy thumbnails
-- Right-click any capture: open, show in folder, copy path, favorite, rename, delete (to recycle bin)
-- Built-in video player in its own window (speed, loop, frame step, fullscreen)
+- 🔴 **Recording controls** — Start, stop, pause, and resume recordings, with a live timer and file size.
+- 🔁 **Instant Replay** — Capture unexpected W moments with the OBS Replay Buffer.
+- 💾 **Save Replay** — Save recent gameplay without recording everything permanently.
+- 📸 **Screenshot** — Capture the current OBS scene output.
+- 📡 **Streaming controls** — Check stream duration, bitrate, and dropped frames. Your stream key stays private.
+- 📷 **Virtual Camera** — Toggle the OBS virtual camera.
 
-**Overlay behavior**
-- Docks to the left or right edge of any monitor and slides in and out with an animation
-- Open with a global hotkey, the tray icon, or by hovering the screen edge
-- Resize by dragging edges and corners, move up and down by dragging the header
-- Pin: keeps the panel open and locks its size and position
-- Tray-only: no taskbar entry
-- Home, Gallery and Settings are pages inside one window
-- Adjustable opacity, width, height, gap to the edge, font size, corner radius and row spacing
-- Floating stat widgets: add as many as you like (statistics with selectable metrics, recording timer, stream status, current scene, mic/desktop mute). Each one can be moved, resized (text scales), made transparent, pinned and made click-through; manage them from the overlay or by right-click
+### 🎬 Production — Director Mode
 
-**Web docks**
-- Floating, resizable docks that show any web page: Twitch chat (just enter a channel), the Twitch Stream Manager, or a custom address
-- Same options as the stat widgets (move, resize, opacity, pin, click-through), plus back / reload / zoom / open in browser
-- Logins are kept between runs in `%APPDATA%\ObsOverlay\web` (local only); "Clear web login data" removes them
-- Only http(s) pages are allowed; web docks load the sites you choose, so they do use the network (the rest of the app does not)
+- 🎞️ **Scene switching** — Switch scenes without leaving your game.
+- 👁️ **Source visibility** — Show or hide individual sources.
+- 🔐 **Source locking** — Lock sources to prevent accidental changes.
+- 🎙️ **Audio controls** — Mute your microphone and desktop audio.
+- 🎚️ **Volume mixer** — Adjust volume across audio sources.
+- 🖼️ **Scene preview** — A snapshot refreshed about once per second.
 
-**Other**
-- Demo mode that works without OBS
-- Searchable settings, rebindable hotkeys with conflict detection
-- OBS password stored in the Windows credential store, never in the settings file and never exported
-- No telemetry; media and settings stay local
+### 🗂️ Gallery — The Clip Vault
 
-## Install
+- 🔎 Search and filter recordings, clips, screenshots, and favorites.
+- 🖼️ Lazy-loaded thumbnails.
+- ⭐ Mark your best captures as favorites.
+- 📂 Open files or show them in File Explorer.
+- 📋 Copy file paths, rename files, or delete them to the Recycle Bin.
+- 🎬 Built-in video player with playback speed, looping, frame stepping, and fullscreen.
 
-Requirements: Windows 10/11 (other platforms are untested), Python 3.10+, OBS Studio 28 or newer.
+### 🧲 Overlay — Always Within Reach
 
+- ↔️ Dock to the left or right edge of any monitor.
+- 🪄 Smooth slide-in and slide-out animations.
+- ⌨️ Global hotkeys for controlling OBS while gaming.
+- 🖱️ Reveal the panel by hovering over the screen edge.
+- 📌 Pin the overlay in place.
+- 📐 Resize and reposition the panel.
+- 🫥 Tray-only mode with no taskbar entry.
+- 🎨 Customize opacity, dimensions, font size, corner radius, and spacing.
+
+### 📊 Floating Widgets — Your HUD, Your Rules
+
+Add as many widgets as you want:
+
+- 📈 System and OBS statistics
+- ⏱️ Recording timer
+- 📡 Stream status
+- 🎬 Current scene
+- 🎙️ Microphone mute status
+- 🔊 Desktop audio mute status
+
+Move, resize, pin, fade, or make widgets click-through.
+
+### 🌐 Web Docks — Chat Without the Alt-Tab Arc
+
+- 💬 Twitch chat
+- 🎛️ Twitch Stream Manager
+- 🔗 Custom HTTP and HTTPS websites
+- ↩️ Back, reload, zoom, and open in browser
+- 🔐 Locally persisted web logins
+- 🫥 Click-through and pin options
+
+Web login data is stored locally in `%APPDATA%\ObsOverlay\web`.
+
+### ⚙️ Quality-of-Life Features
+
+- 🧪 Demo mode — Works without OBS.
+- 🔍 Searchable settings.
+- ⌨️ Rebindable hotkeys with conflict detection.
+- 🔑 OBS password stored in Windows Credential Manager.
+- 🚫 No telemetry.
+- 🏠 Local-first media and settings.
+
+---
+
+## 🛠️ Installation
+
+### Requirements
+
+- 🪟 Windows 10 or Windows 11
+- 🐍 Python 3.10+
+- 🎥 OBS Studio 28+
+- 🔌 OBS WebSocket v5
+
+### 1. Clone the Repository
+
+```bash
+git clone <your-repository-url>
+cd <your-repository-folder>
 ```
+
+### 2. Install Dependencies
+
+```bash
 pip install -r requirements.txt
-python main.py            # connect to OBS
-python main.py --demo     # simulation, no OBS needed
 ```
 
-In OBS, enable the server under **Tools > WebSocket Server Settings** (default port 4455). Enter the host, port and password in the overlay under **Settings > OBS connection**, then use **Test connection**.
+### 3. Configure OBS
 
-For the Replay Buffer features, enable it in OBS under **Settings > Output > Replay Buffer**.
+In OBS Studio, open:
 
-## Hotkeys (defaults, all rebindable)
+**Tools → WebSocket Server Settings**
+
+1. Enable the WebSocket server.
+2. Check the port (usually `4455`).
+3. Configure your password.
+4. Apply the settings.
+
+### 4. Launch the Overlay
+
+Connect to OBS:
+
+```bash
+python main.py
+```
+
+Or try Demo Mode:
+
+```bash
+python main.py --demo
+```
+
+### 5. Connect
+
+Open **Settings → OBS connection**, enter your host, port, and password, then click **Test connection**.
+
+### 6. Enable Instant Replay
+
+In OBS, open **Settings → Output → Replay Buffer** and enable the buffer.
+
+---
+
+## ⌨️ Default Hotkeys
 
 | Action | Shortcut |
-| --- | --- |
-| Show / hide overlay | Alt+Z |
-| Start / stop recording | Alt+F9 |
-| Toggle Instant Replay | Alt+Shift+F10 |
-| Save replay | Alt+F10 |
-| Screenshot | Alt+F1 |
-| Mute microphone | Ctrl+Alt+M |
-| Mute desktop audio | Ctrl+Alt+D |
-| Show / hide floating widgets | Alt+R |
-| Toggle click-through for all widgets | Alt+Shift+W |
+|---|---|
+| Show / hide overlay | `Alt + Z` |
+| Start / stop recording | `Alt + F9` |
+| Toggle Instant Replay | `Alt + Shift + F10` |
+| Save replay | `Alt + F10` |
+| Screenshot | `Alt + F1` |
+| Mute microphone | `Ctrl + Alt + M` |
+| Mute desktop audio | `Ctrl + Alt + D` |
+| Show / hide widgets | `Alt + R` |
+| Toggle widget click-through | `Alt + Shift + W` |
 
-Hotkeys are global and passive, so they are not blocked from the game. Some games with anti-cheat, or programs running as administrator, may prevent global hotkeys from being detected.
+All shortcuts are rebindable. Some anti-cheat systems and elevated applications may interfere with global hotkeys.
 
-## Build a Windows executable
+---
 
-Web docks use QtWebEngine (Chromium), so the built app and installer are roughly 150 MB larger than without it.
+## 📦 Build for Windows
 
-```
+Run:
+
+```bat
 build.bat
 ```
 
-The program is created at `dist\ObsOverlay\ObsOverlay.exe`; keep the whole folder together. To start with Windows, put a shortcut to the exe in the folder opened by `shell:startup` (Win+R).
+The executable is created at:
 
-To build the installer locally, install [Inno Setup 6](https://jrsoftware.org/isdl.php), run `build.bat`, then `iscc installer.iss`. The result is `installer_output\ObsOverlay-Setup-<version>.exe`.
-
-Pushing a tag such as `v0.1.0` makes GitHub Actions build the exe and attach both `ObsOverlay-Setup-0.1.0.exe` (installer) and `ObsOverlay-windows.zip` (portable) to a release.
-
-## Limitations
-
-- The overlay is a normal always-on-top window. It does **not** draw inside exclusive-fullscreen games; use borderless or windowed-fullscreen mode.
-- Screenshots capture the OBS scene output, not the desktop or the game directly.
-- The preview is a snapshot refreshed about once per second, not live video.
-- Audio level meters are not shown. Volume and mute controls are real.
-- Recording format, encoder and replay save folder are configured in OBS, not in this app.
-- Replay length is written to the OBS Simple-output profile and applies when the buffer starts.
-- Not implemented: Photo Mode, automatic highlights, filter editor, creating or renaming scenes, GPU statistics, light theme.
-
-## Project layout
-
-```
-main.py             entry point, tray icon, hotkey wiring
-core/backends.py    OBS WebSocket backend and demo backend (same interface)
-core/service.py     state, worker thread, events, reconnect, notifications
-core/gallery.py     recursive media scan, thumbnails, safe file operations
-core/hotkeys.py     global hotkeys and conflict detection
-core/config.py      settings and credential storage
-ui/                 overlay, gallery and player, settings, statistics panel
+```text
+dist\ObsOverlay\ObsOverlay.exe
 ```
 
-## License
+Keep the entire output folder together.
 
-MIT, see [LICENSE](LICENSE).
+To build the installer, install [Inno Setup 6](https://jrsoftware.org/isdl.php), run `build.bat`, then:
+
+```bat
+iscc installer.iss
+```
+
+The installer is created in `installer_output\`.
+
+To launch on Windows startup, press `Win + R`, enter `shell:startup`, and add a shortcut to `ObsOverlay.exe`.
+
+> 💡 Web docks use QtWebEngine, adding roughly 150 MB to the build.
+
+---
+
+## ⚠️ Known Limitations
+
+- Exclusive-fullscreen games are not supported; use borderless or windowed fullscreen.
+- Screenshots capture the OBS scene output, not the desktop directly.
+- Scene previews refresh approximately once per second.
+- Audio level meters are not implemented.
+- Recording format and encoder settings remain in OBS.
+- Replay duration is configured through the OBS Simple-output profile.
+- Windows is the primary supported platform.
+
+### 🚧 Not Implemented Yet
+
+- 📸 Photo Mode
+- ✨ Automatic highlights
+- 🎨 Filter editor
+- 🎬 Creating or renaming scenes
+- 📊 GPU statistics
+- ☀️ Light theme
+
+---
+
+## 🗂️ Project Structure
+
+```text
+ObsOverlay/
+├── main.py
+├── core/
+│   ├── backends.py
+│   ├── service.py
+│   ├── gallery.py
+│   ├── hotkeys.py
+│   └── config.py
+├── ui/
+├── requirements.txt
+├── build.bat
+├── installer.iss
+└── README.md
+```
+
+- `main.py` — Entry point, tray icon, and hotkey wiring.
+- `core/backends.py` — OBS WebSocket and demo backends.
+- `core/service.py` — State, worker thread, events, and reconnect logic.
+- `core/gallery.py` — Media scanning, thumbnails, and file operations.
+- `core/hotkeys.py` — Global hotkeys and conflict detection.
+- `core/config.py` — Settings and credential storage.
+- `ui/` — Overlay, gallery, player, settings, and widgets.
+
+---
+
+## 🔒 Privacy & Security
+
+- 🔑 OBS passwords are stored in Windows Credential Manager.
+- 🚫 Passwords are not saved in the regular settings file or exported.
+- 🏠 Media and settings remain local.
+- 🚫 No telemetry.
+- 🌐 Web docks connect to the websites you choose.
+
+---
+
+## 🐛 Bugs & Contributions
+
+Found a bug or have an idea? Open a GitHub Issue or submit a pull request.
+
+When reporting bugs, include your Windows, Python, and OBS versions, reproduction steps, and relevant error messages.
+
+**Never share your OBS password or stream key in issue reports.** 🔒
+
+---
+
+## 📜 License
+
+Licensed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
+
+---
+
+## 💜 Play the Game. Control OBS. Catch the W. 🎮🔥
+
+⭐ If you find this project useful, consider giving it a star on GitHub.
