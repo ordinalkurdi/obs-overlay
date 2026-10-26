@@ -1,7 +1,7 @@
 from __future__ import annotations
-from PySide6.QtCore import Qt, Signal, QTimer, QPropertyAnimation, QSize
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QIcon, QKeyEvent
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget, QToolButton, QGraphicsOpacityEffect)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QSlider, QStyle, QStyleOptionSlider, QVBoxLayout, QWidget, QToolButton)
 
 FG, FG_DIM, BG, HEADER, LINE = "#f2f2f2", "#9a9a9a", "#181818", "#303030", "#2c2c2c"
 
@@ -49,6 +49,15 @@ def stylesheet(cfg) -> str:
     QScrollBar::handle:vertical {{ background: #444; border-radius: 3px; min-height: 20px; }}
     QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
     QToolTip {{ background: #111; color: {FG}; border: 1px solid #444; padding: 3px; }}
+    #card {{ background: #1e1e1e; border: 1px solid {LINE}; border-radius: {r}px; }}
+    #sectionTitle {{ color: {FG_DIM}; font-size: {fs - 2}px; font-weight: 600; letter-spacing: 1px; }}
+    #pageTitle {{ font-size: {fs + 5}px; font-weight: 600; }}
+    #settingTitle {{ font-weight: 600; }}
+    #valueLabel {{ color: {a}; font-weight: 600; }}
+    #setting {{ background: transparent; }}
+    QPushButton#link {{ background: transparent; border: none; color: {a}; padding: 4px 8px; font-weight: 600; }}
+    QPushButton#link:hover {{ background: #2a2a2a; }}
+    QPlainTextEdit {{ background: #1a1a1a; border: 1px solid #333; border-radius: 5px; font-family: Consolas, 'Cascadia Mono', monospace; }}
     QDialog, QTabWidget, #plain {{ background: {BG}; }}
     QCheckBox::indicator {{ width: 16px; height: 16px; }}
     """
@@ -68,14 +77,15 @@ class Row(QFrame):
         self.setObjectName("row"); self.setFocusPolicy(Qt.StrongFocus); self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_StyledBackground, True)
         lay = QHBoxLayout(self); lay.setContentsMargins(12, 0, 12, 0); lay.setSpacing(12)
-        self.ico = QLabel(); self.ico.setFixedSize(22, 22)
+        self.ico = QLabel(self); self.ico.setFixedSize(22, 22)
         self.set_icon(icon_name)
         col = QVBoxLayout(); col.setSpacing(1)
-        self.title = QLabel(title); self.sub = QLabel(subtitle); self.sub.setObjectName("dim")
+        # children get `self` as parent: a parentless QLabel that is made visible pops up as its own little window
+        self.title = QLabel(title, self); self.sub = QLabel(subtitle, self); self.sub.setObjectName("dim")
         self.sub.setVisible(bool(subtitle))
         col.addWidget(self.title); col.addWidget(self.sub)
         lay.addWidget(self.ico); lay.addLayout(col, 1)
-        self.right = QLabel(); self.right.setFixedSize(20, 20)
+        self.right = QLabel(self); self.right.setFixedSize(20, 20)
         if chevron:
             self.right.setPixmap(icon("chevron-right", FG_DIM).pixmap(18, 18))
         lay.addWidget(self.right)
@@ -114,30 +124,35 @@ def tool_button(icon_name: str, tip: str, checkable=False, size=18) -> QToolButt
     return b
 
 
-class Toast(QLabel):
-    """Small non-blocking notification that fades out."""
-    COLORS = {"info": "#3a3a3a", "success": "#1f5a3d", "warn": "#6b5410", "error": "#7a2323"}
+class SeekSlider(QSlider):
+    """Slider that jumps straight to the clicked position (and keeps following the mouse while dragging)
+    instead of the default page-step behaviour, which made the handle snap back to its old position."""
 
-    def __init__(self, parent: QWidget):
-        super().__init__(parent)
-        self.setWordWrap(True); self.setAlignment(Qt.AlignCenter); self.hide()
-        self._fx = QGraphicsOpacityEffect(self); self.setGraphicsEffect(self._fx)
-        self._anim = QPropertyAnimation(self._fx, b"opacity", self); self._anim.setDuration(350)
-        self._timer = QTimer(self); self._timer.setSingleShot(True); self._timer.timeout.connect(self._fade)
-        self._anim.finished.connect(lambda: self.hide() if self._fx.opacity() < 0.05 else None)
+    def _value_at(self, x: int) -> int:
+        opt = QStyleOptionSlider(); self.initStyleOption(opt)
+        groove = self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self)
+        handle = self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+        span = max(1, groove.width() - handle.width())
+        pos = x - groove.x() - handle.width() // 2
+        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), max(0, min(span, pos)), span, opt.upsideDown)
 
-    def show_msg(self, level: str, text: str, seconds: float, animate=True):
-        self.setStyleSheet(f"background:{self.COLORS.get(level, '#3a3a3a')}; border-radius:6px; padding:7px 10px;")
-        self.setText(text)
-        w = self.parentWidget().width() - 24
-        self.setFixedWidth(w); self.adjustSize(); self.setFixedWidth(w)
-        self.move(12, self.parentWidget().height() - self.height() - 40)
-        self._anim.stop(); self._fx.setOpacity(1.0); self.show(); self.raise_()
-        self._timer.start(int(seconds * 1000))
-        self._animate = animate
+    def _seek_to(self, x: int):
+        v = self._value_at(x)
+        self.setSliderPosition(v)
+        self.sliderMoved.emit(v)
 
-    def _fade(self):
-        if getattr(self, "_animate", True):
-            self._anim.setStartValue(1.0); self._anim.setEndValue(0.0); self._anim.start()
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.setSliderDown(True); self._seek_to(int(e.position().x())); e.accept()
         else:
-            self.hide()
+            super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self.isSliderDown(): self._seek_to(int(e.position().x())); e.accept()
+        else: super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self.isSliderDown():
+            self.setSliderDown(False); e.accept()
+        else:
+            super().mouseReleaseEvent(e)

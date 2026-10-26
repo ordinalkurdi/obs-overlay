@@ -2,14 +2,16 @@ from __future__ import annotations
 import time
 
 import psutil
-from PySide6.QtCore import Qt, QTimer, Signal, QPoint, QRect, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPixmap, QGuiApplication, QCursor, QColor, QPainter, QRegion
-from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel, QMessageBox, QSlider, QVBoxLayout, QWidget,
+from PySide6.QtCore import Qt, QTimer, Signal, QPoint, QRect, QRectF, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QPixmap, QGuiApplication, QCursor, QColor, QLinearGradient, QPainter, QRegion
+from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel, QMenu, QSlider, QVBoxLayout, QWidget,
                                QFrame, QScrollArea, QStackedWidget, QSizePolicy)
 
-from core import gallery
+from core import audio, gallery
+from core.audio import Ballistics
 from core.service import ObsService
-from .common import FG_DIM, Row, Toast, icon, separator, tool_button
+from . import dialogs
+from .common import FG_DIM, Row, icon, separator, tool_button
 from .gallery_view import GalleryStrip, MediaStore
 
 
@@ -67,6 +69,32 @@ class StatsPanel(QWidget):
         self.move(x, y)
 
 
+class LevelBar(QWidget):
+    """Smooth audio level bar (OBS-style green/yellow/red) with a peak-hold marker. Animated by the overlay's meter timer."""
+    def __init__(self):
+        super().__init__(); self.setFixedHeight(6); self.motion = Ballistics()
+
+    def set_target(self, pct: float): self.motion.target = max(0.0, min(100.0, pct))
+    def step(self, dt: float) -> bool:
+        moving = self.motion.step(dt)
+        if moving or self.motion.value == 0.0: self.update()
+        return moving
+
+    def paintEvent(self, e):
+        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height(); r = h / 2
+        p.setPen(Qt.NoPen); p.setBrush(QColor("#2c2c2c")); p.drawRoundedRect(QRectF(0, 0, w, h), r, r)
+        fill = w * self.motion.value / 100.0
+        if fill > 0.5:
+            g = QLinearGradient(0, 0, w, 0)                         # fixed across the full width, like a real meter
+            for pos, col in ((0.0, "#4cc38a"), (0.68, "#4cc38a"), (0.85, "#e6b800"), (1.0, "#ff5c5c")): g.setColorAt(pos, QColor(col))
+            p.setBrush(g); p.setClipRect(QRectF(0, 0, fill, h)); p.drawRoundedRect(QRectF(0, 0, w, h), r, r); p.setClipping(False)
+        pk = w * self.motion.peak / 100.0
+        if pk > 3:
+            p.setBrush(QColor(255, 255, 255, 190)); p.drawRect(QRectF(min(pk, w) - 2, 0, 2, h))
+        p.end()
+
+
 class Grip(QWidget):
     """Invisible resize handle on the panel border; uses the OS resize so it feels native."""
     def __init__(self, parent, edges, cursor):
@@ -115,13 +143,14 @@ class Overlay(QWidget):
         self.setWindowTitle("OBS OVERLAY"); self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.StrongFocus)
         self._build()
-        svc.state_changed.connect(self.sync); svc.notify.connect(self.on_notify); svc.preview_ready.connect(self._set_preview)
+        svc.state_changed.connect(self.sync); svc.notify.connect(self.on_notify); svc.preview_ready.connect(self._set_preview); svc.meters_changed.connect(self._update_meters)
         self.idle = QTimer(self); self.idle.setSingleShot(True); self.idle.timeout.connect(self._auto_hide)
         self.tick = QTimer(self); self.tick.setInterval(500); self.tick.timeout.connect(self._tick)
         self.pv = QTimer(self); self.pv.timeout.connect(self.svc.request_preview)
         self.anim = QPropertyAnimation(self, b"pos", self)
         self.anim.valueChanged.connect(lambda _v: self._clip()); self.anim.finished.connect(self._anim_done)
         self.edge = EdgeTrigger(); self.edge.entered.connect(self.show_panel)
+        self._meter_t = 0.0; self._meter_timer = QTimer(self); self._meter_timer.timeout.connect(self._meter_tick)
         self.leave_timer = QTimer(self); self.leave_timer.setSingleShot(True); self.leave_timer.setInterval(450)
         self.leave_timer.timeout.connect(self._maybe_leave)
         self._user_resize = False
@@ -134,7 +163,7 @@ class Overlay(QWidget):
                 (E.LeftEdge | E.BottomEdge, C.SizeBDiagCursor, "bl")]
         self.grips = {k: Grip(self, ed, cur) for ed, cur, k in spec}
         self.pin.setChecked(bool(self.cfg["pinned"]))
-        self.apply_settings(); self.sync()
+        self.apply_settings(); self.sync(); self.prev_row.set_texts(sub=self._preview_sub())
 
     # ---- UI ----------------------------------------------------------------
     def _build(self):
@@ -175,7 +204,7 @@ class Overlay(QWidget):
         self.scene_row = Row("theater", "Scene", "", chevron=False)
         self.scene_box = QComboBox(); self.scene_box.setMinimumWidth(150); self.scene_box.setToolTip("Switch OBS scene")
         self.scene_row.add_tail(self.scene_box); hv.addWidget(self.scene_row)
-        self.prev_row = Row("monitor-eye", "Preview", "Scene snapshot (updates ~1/s, not live video)")
+        self.prev_row = Row("monitor-eye", "Preview", "")
         hv.addWidget(self.prev_row)
         self.prev_lab = QLabel(alignment=Qt.AlignCenter); self.prev_lab.setVisible(False); hv.addWidget(self.prev_lab)
         self.src_row = Row("layers-outline", "Sources", "Show / hide / lock sources of the current scene"); hv.addWidget(self.src_row)
@@ -183,21 +212,20 @@ class Overlay(QWidget):
         self.srcbox.setVisible(False); hv.addWidget(self.srcbox)
         hv.addWidget(separator())
         # audio
-        self.mic = Row("microphone", "Microphone", "", chevron=False); self.desk = Row("volume-high", "Desktop audio", "", chevron=False)
-        self.mix = Row("tune-vertical", "Audio mixer", "Volume of all OBS audio sources")
-        hv.addWidget(self.mic); hv.addWidget(self.desk); hv.addWidget(self.mix)
-        self.mixer = QWidget(); self.ml = QVBoxLayout(self.mixer); self.ml.setContentsMargins(46, 0, 16, 4); self.mixer.setVisible(False)
+        self.mix = Row("tune-vertical", "Audio", "Mute, volume and live activity of OBS audio sources")
+        self.mix.set_right_icon("chevron-down", FG_DIM)
+        hv.addWidget(self.mix)
+        self.mixer = QWidget(); self.ml = QVBoxLayout(self.mixer); self.ml.setContentsMargins(46, 0, 16, 4)
         hv.addWidget(self.mixer); hv.addWidget(separator())
         self.stat_row = Row("view-dashboard-outline", "Widgets", "", tooltip="Add and customize floating widgets (stats, web docks)"); hv.addWidget(self.stat_row)
         self.gallery_btn_hint = None
         self.footer = QLabel(); self.footer.setObjectName("dim"); self.footer.setContentsMargins(16, 6, 16, 0); self.footer.setWordWrap(True)
         hv.addWidget(self.footer)
-        self.toast = Toast(self.panel)
+        self.toast = dialogs.NotificationWindow()           # centered on screen, independent of overlay visibility
         # wiring
         self.rec.clicked.connect(self._rec_clicked); self.live.clicked.connect(self._live_clicked)
         self.rep.clicked.connect(self.svc.toggle_replay); self.save.clicked.connect(self.svc.save_replay); self.shot.clicked.connect(self.svc.screenshot)
-        self.mic.clicked.connect(lambda: self.svc.toggle_mute_role("mic")); self.desk.clicked.connect(lambda: self.svc.toggle_mute_role("desktop"))
-        self.mix.clicked.connect(lambda: self.mixer.setVisible(not self.mixer.isVisible()))
+        self.mix.clicked.connect(self._toggle_mixer)
         self.prev_row.clicked.connect(self._toggle_preview)
         self.pause.clicked.connect(self.svc.toggle_pause); self.vcam.clicked.connect(self.svc.toggle_vcam)
         self.src_row.clicked.connect(self._toggle_sources)
@@ -232,7 +260,11 @@ class Overlay(QWidget):
     def apply_settings(self):
         flags = Qt.Tool | Qt.FramelessWindowHint
         if self.cfg["always_on_top"] or self.docked(): flags |= Qt.WindowStaysOnTopHint
-        was = self.isVisible(); self.setWindowFlags(flags); self.setWindowOpacity(float(self.cfg["opacity"]))
+        was = self.isVisible(); key = bool(self.cfg["always_on_top"] or self.docked())
+        relaunch = False
+        if key != getattr(self, "_top_key", None):          # changing window flags recreates the window: only when needed
+            self._top_key = key; self.setWindowFlags(flags); relaunch = was
+        self.setWindowOpacity(float(self.cfg["opacity"]))
         d = self.docked()
         flush = d and int(self.cfg["dock_gap"]) == 0
         self.panel.setStyleSheet("#panel{border-radius:0px;}" if flush else ""); self.header.setStyleSheet("#header{border-radius:0px;}" if flush else "")
@@ -240,8 +272,9 @@ class Overlay(QWidget):
         self.setMinimumSize(320, 320); self.setMaximumSize(g.width(), g.height()); self.resize(r.size())
         self._edge_cfg(r); self._place_grips()
         self.anim.setDuration(int(self.cfg["anim_ms"]))
-        if was: self.setGeometry(r); self.clearMask(); self.show(); self._open = True
-        else: self.move(r.topLeft())
+        if relaunch: self.setGeometry(r); self.clearMask(); self.show(); self._open = True
+        elif was and self._open: self.setGeometry(r)
+        elif not was: self.move(r.topLeft())
         self.edge.refresh(self._open)
 
     def show_panel(self):
@@ -339,14 +372,14 @@ class Overlay(QWidget):
         self.title.setText(t); self.back.setVisible(t != "OBS OVERLAY")
 
     def hideEvent(self, e):
-        self.pv.stop(); self._open = False; self.edge.refresh(False)
+        self._meter_timer.stop(); self.pv.stop(); self._open = False; self.edge.refresh(False)
         if not self.docked():
             self.cfg["pos"] = [self.x(), self.y()]; self.cfg.save()
         super().hideEvent(e)
 
     def showEvent(self, e):
-        super().showEvent(e); self.store.rescan()
-        if self._preview_on: self.pv.start(int(1000 / max(1, int(self.cfg["preview_fps"]))))
+        super().showEvent(e); self.store.rescan(); self._update_meters()
+        if self._preview_on: self.pv.start(self._preview_interval())
 
     def leaveEvent(self, e):
         if self.docked() and self.cfg["dock_autohide"] and not self.pinned and self.stack.currentIndex() == 0:
@@ -399,7 +432,7 @@ class Overlay(QWidget):
 
     def _confirm(self, key, text):
         if not self.cfg[key]: return True
-        return QMessageBox.question(self, "Confirm", text) == QMessageBox.Yes
+        return dialogs.confirm(self, "Confirm", text)
 
     def _rec_clicked(self):
         if self.svc.snap.get("recording") and not self._confirm("confirm_stop_record", "Stop recording?"): return
@@ -415,7 +448,7 @@ class Overlay(QWidget):
         self._preview_on = not self._preview_on; self.prev_lab.setVisible(self._preview_on)
         if self._preview_on:
             self.prev_row.set_right_icon("chevron-down"); self.svc.request_preview()
-            self.pv.start(int(1000 / max(1, int(self.cfg["preview_fps"]))))
+            self.pv.start(self._preview_interval())
         else:
             self.prev_row.set_right_icon("chevron-right"); self.pv.stop()
 
@@ -444,12 +477,26 @@ class Overlay(QWidget):
             lock.clicked.connect(lambda _=False, i=it["id"], l=lk: self.svc.set_item_locked(i, not l))
             h.addWidget(eye); h.addWidget(name, 1); h.addWidget(lock); self.sl.addWidget(row)
 
+    def _preview_interval(self) -> int:
+        return self.cfg.preview_delay()                 # validated 100-5000 ms
+
+    def _preview_sub(self) -> str:
+        ms = self.svc.preview_ms
+        return f"Snapshot every {self._preview_interval()} ms" + (f" - last frame {ms:.0f} ms" if ms else "") + " (not live video)"
+
+    def apply_preview(self):
+        """Apply a changed processing time immediately: only the timer interval changes (no restart, no player reload)."""
+        if self._preview_on and self.isVisible():
+            self.pv.start(self._preview_interval()); self.svc.request_preview()
+        self.prev_row.set_texts(sub=self._preview_sub())
+
     def _set_preview(self, data: bytes):
         pm = QPixmap(); pm.loadFromData(data)
         if not pm.isNull(): self.prev_lab.setPixmap(pm.scaledToWidth(self.width() - 32, Qt.SmoothTransformation))
+        self.prev_row.set_texts(sub=self._preview_sub())
 
     def on_notify(self, level, text):
-        if self.cfg["notifications"] and self.isVisible(): self.toast.show_msg(level, text, float(self.cfg["notification_seconds"]))
+        if self.cfg["notifications"]: self.toast.show_msg(level, text, float(self.cfg["notification_seconds"]))
 
     # ---- state sync --------------------------------------------------------
     def sync(self):
@@ -457,7 +504,7 @@ class Overlay(QWidget):
         col = {"connected": "#3ecf8e", "demo": "#4aa3ff", "connecting": "#e6b800"}.get(svc.status, "#e5534b")
         self.dot.setStyleSheet(f"background:{col}; border-radius:5px;"); self.dot.setToolTip(svc.status_text + (f"\n{svc.error}" if svc.error else ""))
         ok = svc.ok
-        for r in (self.rec, self.rep, self.save, self.shot, self.live, self.scene_row, self.mic, self.desk, self.mix, self.prev_row, self.src_row):
+        for r in (self.rec, self.rep, self.save, self.shot, self.live, self.scene_row, self.mix, self.prev_row, self.src_row):
             r.setEnabled(ok)
         rec = s.get("recording")
         self.rec.set_icon("stop-circle-outline" if rec else "record-circle-outline", "#ff5c5c" if rec else "#f2f2f2")
@@ -477,9 +524,6 @@ class Overlay(QWidget):
         if s.get("scene"): self.scene_box.setCurrentText(s["scene"])
         self.scene_box.blockSignals(False)
         self.scene_row.set_texts(sub="" if ok else "Not connected")
-        inp = {i["name"]: i for i in s.get("inputs", [])}
-        self._role(self.mic, s.get("mic"), inp, "microphone", "microphone-off", "No microphone source in OBS", "mic_mute")
-        self._role(self.desk, s.get("desktop"), inp, "volume-high", "volume-off", "No desktop audio source in OBS", "desktop_mute")
         self._mixer(s.get("inputs", []))
         self.stat_row.set_texts(sub=("On" if self.cfg["stats_visible"] else "Off") + " - floating stats and web docks")
         items = s.get("items", []); self._sources(items)
@@ -514,13 +558,21 @@ class Overlay(QWidget):
         if s.get("streaming"): s["stream_dur"] = s.get("stream_dur", 0) + now
         self.rec.set_texts(sub=self._rec_sub()); self.live.set_texts(sub=self._stream_sub())
 
-    def _role(self, row, name, inp, ico_on, ico_off, missing, action):
-        if not name or name not in inp:
-            row.set_texts(sub=missing); row.set_icon(ico_on, FG_DIM); row.set_right_icon("minus", FG_DIM); return
-        muted = inp[name]["muted"]
-        row.set_icon(ico_off if muted else ico_on, "#ff7b7b" if muted else "#f2f2f2")
-        row.set_texts(sub=f"{name} - {'MUTED' if muted else 'live'} - {self._hint(action)}")
-        row.set_right_icon("toggle-switch-off-outline" if muted else "toggle-switch", "#ff7b7b" if muted else "#4cc38a")
+    def _toggle_mixer(self):
+        self.mixer.setVisible(not self.mixer.isVisible())
+        self.mix.set_right_icon("chevron-down" if self.mixer.isVisible() else "chevron-right", FG_DIM)
+
+    def _mute_clicked(self, name):
+        # Always toggle from the REAL OBS state (not from a local flag) so the control can never desynchronize.
+        cur = next((i["muted"] for i in self.svc.snap.get("inputs", []) if i["name"] == name), False)
+        self.svc.set_mute(name, not cur)
+
+    def _source_menu(self, name, pos):
+        m = QMenu(self)
+        m.addAction("Use as microphone", lambda: self.svc.set_role("mic", name))
+        m.addAction("Use as desktop audio", lambda: self.svc.set_role("desktop", name))
+        m.addAction("Auto-detect microphone / desktop", lambda: (self.svc.set_role("mic", ""), self.svc.set_role("desktop", "")))
+        m.exec(pos)
 
     def _mixer(self, inputs):
         sig = tuple(i["name"] for i in inputs)
@@ -528,14 +580,67 @@ class Overlay(QWidget):
             while self.ml.count():
                 w = self.ml.takeAt(0).widget()
                 if w: w.deleteLater()
-            self._sliders = {}
+            self._rows = {}
+            if not inputs:
+                l = QLabel("No audio sources found" if self.svc.ok else "Not connected"); l.setObjectName("dim"); self.ml.addWidget(l)
             for i in inputs:
-                lab = QLabel(i["name"]); lab.setObjectName("dim"); sl = QSlider(Qt.Horizontal); sl.setRange(-60, 0)
-                sl.setToolTip("Volume (dB). Level meters are not shown: this build does not subscribe to OBS meter events.")
-                sl.valueChanged.connect(lambda val, n=i["name"]: self.svc.set_volume_db(n, float(val)))
-                self.ml.addWidget(lab); self.ml.addWidget(sl); self._sliders[i["name"]] = sl
+                n = i["name"]
+                box = QWidget(); bv = QVBoxLayout(box); bv.setContentsMargins(0, 2, 0, 2); bv.setSpacing(2)
+                head = QHBoxLayout(); head.setSpacing(6)
+                mute = tool_button("volume-high", "Mute", size=16)
+                dot = QLabel(); dot.setFixedSize(8, 8)
+                name = QLabel(n); name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+                name.setToolTip("Right-click to use this source as microphone or desktop audio"); name.setContextMenuPolicy(Qt.CustomContextMenu)
+                name.customContextMenuRequested.connect(lambda p, nm=n, w=name: self._source_menu(nm, w.mapToGlobal(p)))
+                head.addWidget(mute); head.addWidget(name, 1); head.addWidget(dot)
+                bar = LevelBar(); dot.setStyleSheet("background:#444; border-radius:4px;")
+                sl = QSlider(Qt.Horizontal); sl.setRange(-60, 0); sl.setToolTip("Volume (dB)")
+                sl.valueChanged.connect(lambda val, nm=n: self.svc.set_volume_db(nm, float(val)))
+                mute.clicked.connect(lambda _=False, nm=n: self._mute_clicked(nm))
+                bv.addLayout(head); bv.addWidget(bar); bv.addWidget(sl); self.ml.addWidget(box)
+                self._rows[n] = dict(mute=mute, dot=dot, name=name, bar=bar, slider=sl, active_until=0.0, lit=False)
             self._mix_sig = sig
+        s = self.svc.snap
         for i in inputs:
-            sl = self._sliders.get(i["name"])
-            if sl and not sl.isSliderDown():
+            r = self._rows.get(i["name"])
+            if not r: continue
+            muted = i["muted"]
+            r["mute"].setIcon(icon("volume-off" if muted else "volume-high", "#ff7b7b" if muted else "#f2f2f2"))
+            r["mute"].setToolTip("Unmute" if muted else "Mute"); r["mute"].setAccessibleName(r["mute"].toolTip())
+            tags = [t for t in ("mic", "desktop") if s.get(t) == i["name"]]
+            r["name"].setText(i["name"] + (f"  ({', '.join(tags)})" if tags else ""))
+            r["name"].setStyleSheet("color:#6f6f6f;" if muted else "")
+            sl = r["slider"]
+            if not sl.isSliderDown():
                 sl.blockSignals(True); sl.setValue(int(max(-60, min(0, i["db"])))); sl.blockSignals(False)
+        self._update_meters()
+
+    def _update_meters(self):
+        """New real OBS meter data (about 20/s): only sets targets; the meter timer animates smoothly towards them."""
+        rows = getattr(self, "_rows", None)
+        if not rows or not self.isVisible(): return
+        on = bool(self.cfg["audio_detect"]) and self.svc.status == "connected"
+        levels, now = self.svc.meters, time.monotonic()
+        for n, r in rows.items():
+            r["bar"].setVisible(on); r["dot"].setVisible(on)
+            if not on: continue
+            lv = levels.get(n)
+            r["bar"].set_target(float(audio.level_percent(lv)) if lv is not None else 0.0)
+            if audio.is_active(lv): r["active_until"] = now + 0.35          # short hold: no flicker between peaks
+            r["dot"].setToolTip("Audio detected" if audio.is_active(lv) else ("No signal" if lv is not None else "No level data from OBS yet"))
+        if on and not self._meter_timer.isActive():
+            self._meter_t = now; self._meter_timer.start(20)                # ~50 fps while something is moving
+
+    def _meter_tick(self):
+        rows = getattr(self, "_rows", None)
+        if not rows or not self.isVisible():
+            self._meter_timer.stop(); return
+        now = time.monotonic(); dt = min(0.1, now - self._meter_t); self._meter_t = now
+        moving = False
+        for r in rows.values():
+            if r["bar"].isVisible(): moving |= r["bar"].step(dt)
+            lit = now < r["active_until"]
+            if lit != r["lit"]:
+                r["lit"] = lit; r["dot"].setStyleSheet(f"background:{'#4cc38a' if lit else '#444'}; border-radius:4px;")
+            moving |= lit
+        if not moving: self._meter_timer.stop()                            # fully at rest: no timer, no CPU

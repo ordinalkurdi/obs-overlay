@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from .audio import apply_roles
 from .backends import ObsBackend, DemoBackend, BackendError
 from .config import Settings, data_dir
 
@@ -23,6 +24,7 @@ class ObsService(QObject):
     notify = Signal(str, str)            # level (info|success|warn|error), text
     media_created = Signal(str)          # path of a new recording / replay / screenshot
     preview_ready = Signal(bytes)
+    meters_changed = Signal()            # fresh real audio levels from OBS
     _call_done = Signal(object, object, object)   # callback, result, error  (worker -> UI thread)
     _event = Signal(str, dict)
 
@@ -32,6 +34,8 @@ class ObsService(QObject):
         self.status = "disconnected"
         self.error = ""
         self.snap: dict = {}
+        self.meters: dict[str, float] = {}
+        self.preview_ms = 0.0
         self.backend = None
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="obs")
         self._busy: set[str] = set()
@@ -89,7 +93,8 @@ class ObsService(QObject):
                 self.status, self.error = "unavailable", "Remote OBS connections are disabled (Settings > Privacy)."
                 self.state_changed.emit(); return
             self.backend = ObsBackend(host, int(self.cfg["port"]), self.cfg.get_password(),
-                                      float(self.cfg["timeout"]), self._emit_from_thread)
+                                      float(self.cfg["timeout"]), self._emit_from_thread,
+                                      meters=bool(self.cfg["audio_detect"]))
         self.status, self.error = "connecting", ""
         self.state_changed.emit()
         b = self.backend
@@ -108,8 +113,10 @@ class ObsService(QObject):
                 if self.cfg["auto_reconnect"] and st != "auth_required" and self.cfg["mode"] == "obs":
                     self._retry.start()
                 return
-            self.snap = res
+            self.snap = apply_roles(res, self.cfg["mic_source"], self.cfg["desktop_source"])
             self.status = "demo" if b.name == "demo" else "connected"
+            if getattr(b, "meter_note", ""): self.say("warn", b.meter_note)
+            if b.name == "obs" and self.cfg["audio_detect"]: QTimer.singleShot(4000, self._check_meters)
             self.say("success", "Demo mode active" if b.name == "demo" else "Connected to OBS")
             self._live.start() if b.name == "obs" else None
             self._apply_poll()
@@ -122,7 +129,7 @@ class ObsService(QObject):
         if b:
             self._pool.submit(b.disconnect)             # clean up event subscriptions off the UI thread
         was = self.status
-        self.status, self.snap = "disconnected", {}
+        self.status, self.snap, self.meters = "disconnected", {}, {}
         if not quiet and was in ("connected", "demo"):
             self.say("warn", "Disconnected")
         self.state_changed.emit()
@@ -154,6 +161,8 @@ class ObsService(QObject):
     def _on_event(self, name, p):
         if name == "exit":
             self._lost("OBS closed"); return
+        if name == "meters":                      # high-frequency: update levels only, no full refresh
+            self.meters = p["levels"]; self.meters_changed.emit(); return
         if name == "record":
             if not p.get("active") and p.get("path"):
                 self.say("success", f"Recording saved: {Path(p['path']).name}")
@@ -184,10 +193,21 @@ class ObsService(QObject):
                 if b.name == "obs":
                     self._lost("OBS connection lost")
                 return
-            self.snap = res
+            self.snap = apply_roles(res, self.cfg["mic_source"], self.cfg["desktop_source"])
             self._apply_poll()
             self.state_changed.emit()
         self._run(b.snapshot, done, key="refresh")
+
+    def _check_meters(self):
+        b = self.backend
+        if b is None or b.name != "obs" or not self.ok or not self.cfg["audio_detect"]: return
+        h = getattr(b, "handler", None)
+        if h is not None and h.meter_events == 0:
+            self.say("warn", "Audio detection: OBS has sent no level data. Check Settings > Advanced > Connection diagnostics")
+
+    def diagnostics(self) -> str:
+        b = self.backend
+        return b.diagnostics() if b is not None and hasattr(b, "diagnostics") else "not connected to OBS"
 
     def _apply_poll(self):
         # Poll only while something time-based is active or the stats panel is visible (no idle polling).
@@ -263,6 +283,19 @@ class ObsService(QObject):
         cur = next((i["muted"] for i in self.snap["inputs"] if i["name"] == name), False)
         self.set_mute(name, not cur)
 
+    def set_role(self, role: str, name: str):
+        """Choose which OBS audio source is the microphone / desktop audio ('' = auto-detect). No new OBS inputs are created."""
+        if role not in ("mic", "desktop"):
+            return
+        if name and name not in {i["name"] for i in self.snap.get("inputs", [])}:
+            return self.say("warn", f"Audio source '{name}' is not available in OBS")
+        other = "desktop" if role == "mic" else "mic"
+        if name and self.cfg[f"{other}_source"] == name:
+            self.cfg[f"{other}_source"] = ""            # one source cannot be both
+        self.cfg[f"{role}_source"] = name; self.cfg.save()
+        self.say("info", f"{'Microphone' if role == 'mic' else 'Desktop audio'}: {name or 'auto-detect'}")
+        self.refresh()
+
     def set_volume_db(self, name, db):
         if self.backend:
             self._run(lambda: self.backend.set_volume_db(name, db), lambda r, e: None)
@@ -307,9 +340,14 @@ class ObsService(QObject):
         if not b or not self.ok: return
         scene, w = self.snap.get("scene", ""), int(self.cfg["preview_width"])
 
+        def work():
+            t0 = time.perf_counter()
+            return b.preview_png(scene, w), (time.perf_counter() - t0) * 1000
+
         def done(res, err):
-            if not err and res: self.preview_ready.emit(res)
-        self._run(lambda: b.preview_png(scene, w), done, key="preview")
+            if not err and res and res[0]:
+                self.preview_ms = res[1]; self.preview_ready.emit(res[0])
+        self._run(work, done, key="preview")        # key: never queue a new frame while one is still processing
 
     def test_connection(self, host, port, password, cb):
         """Standalone connection test that does not disturb the active session."""

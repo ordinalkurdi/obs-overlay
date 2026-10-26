@@ -8,7 +8,7 @@ import psutil
 from PySide6.QtCore import QObject, QPoint, QRect, QSize, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea,
-                               QSlider, QVBoxLayout, QWidget, QApplication, QLineEdit, QSizePolicy, QToolButton)
+                               QSlider, QVBoxLayout, QWidget, QApplication, QLineEdit, QToolButton)
 
 from core.config import data_dir
 from core.webdocks import PRESETS, host_of, normalize_url, preset_url

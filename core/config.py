@@ -71,7 +71,10 @@ DEFAULTS: dict = {
     "notification_seconds": 3,
     "hide_filenames": False,
     "favorites": [],
-    "preview_fps": 1,
+    "preview_delay_ms": 1000,      # processing time / delay between preview snapshots (100-5000 ms)
+    "audio_detect": True,          # subscribe to OBS volume meters (real levels / activity)
+    "mic_source": "",              # "" = auto-detect
+    "desktop_source": "",
     "preview_width": 320,
     "stats_visible": False,        # master switch for all floating widgets
     "widgets": [],                 # list of widget dicts (see ui/widgets_dock.py)
@@ -106,6 +109,8 @@ class Settings:
                     self.data["hotkeys"].update({a: b for a, b in v.items() if a in HOTKEY_LABELS})
                 elif k in DEFAULTS:
                     self.data[k] = v
+            if "preview_delay_ms" not in raw and isinstance(raw.get("preview_fps"), (int, float)) and raw["preview_fps"] > 0:
+                self.data["preview_delay_ms"] = int(1000 / raw["preview_fps"])      # migrate the old per-second setting
         except FileNotFoundError:
             pass
         except Exception:
@@ -113,6 +118,12 @@ class Settings:
                 self.path.rename(self.path.with_suffix(".corrupt.json"))   # keep a backup, use defaults
             except OSError:
                 pass
+
+    def preview_delay(self) -> int:
+        try:
+            return max(100, min(5000, int(self.data["preview_delay_ms"])))
+        except (TypeError, ValueError):
+            return 1000
 
     def save(self):
         tmp = self.path.with_suffix(".tmp")

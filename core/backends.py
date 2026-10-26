@@ -7,6 +7,8 @@ from __future__ import annotations
 import base64, time, threading
 from pathlib import Path
 
+from .audio import peak_from_levels
+
 AUDIO_KIND_HINTS = ("wasapi", "pulse", "alsa", "coreaudio", "audio")
 
 
@@ -28,8 +30,10 @@ def _empty_snapshot() -> dict:
 class ObsBackend:
     name = "obs"
 
-    def __init__(self, host, port, password, timeout, emit):
+    def __init__(self, host, port, password, timeout, emit, meters=False):
         self.host, self.port, self.password, self.timeout = host, port, password, timeout
+        self.meters, self.meter_note = meters, ""
+        self.subs_mask = 0; self.registered: list[str] = []; self.handler = None
         self.emit = emit                    # emit(event_name, payload_dict)
         self.req = None
         self.ev = None
@@ -41,8 +45,17 @@ class ObsBackend:
         import obsws_python as obs
         try:
             self.req = obs.ReqClient(host=self.host, port=self.port, password=self.password, timeout=self.timeout)
-            self.ev = obs.EventClient(host=self.host, port=self.port, password=self.password)
-            self.ev.callback.register(_Events(self.emit))
+            kw = {}
+            if self.meters:
+                # obs-websocket eventSubscriptions bitmask: all low-volume events (bits 0-10 = 2047) + InputVolumeMeters (1 << 16).
+                # Plain integers: the enum member names differ between obsws-python versions.
+                kw["subs"] = 2047 | (1 << 16)
+            self.subs_mask = kw.get("subs", 2047)
+            self.ev = obs.EventClient(host=self.host, port=self.port, password=self.password, **kw)
+            self.handler = _Events(self.emit)
+            fns = self.handler.callbacks()                 # explicit functions with proper __name__ (what obsws-python dispatches on)
+            self.registered = [f.__name__ for f in fns]
+            self.ev.callback.register(fns)
         except Exception as e:                       # classify without ever echoing the password
             msg = str(e).lower()
             self.disconnect()
@@ -65,6 +78,13 @@ class ObsBackend:
 
     def ping(self):
         self.req.get_version()
+
+    def diagnostics(self) -> str:
+        h = self.handler
+        return (f"event subscriptions mask: {self.subs_mask} (meters {'on' if self.meters else 'off'})\n"
+                f"registered event handlers: {len(self.registered)}\n"
+                f"volume-meter events received: {h.meter_events if h else 0}\n"
+                f"last handler error: {(h.last_error if h else '') or 'none'}")
 
     # ---- state -------------------------------------------------------------
     def snapshot(self) -> dict:
@@ -179,7 +199,29 @@ class ObsBackend:
 
 class _Events:
     """obs-websocket event handlers (called on the client's thread). Names map to OBS events."""
-    def __init__(self, emit): self._emit = emit
+    def __init__(self, emit):
+        self._emit = emit; self._last_meter = 0.0
+        self.meter_events = 0; self.last_error = ""
+
+    def callbacks(self):
+        """Every on_<event> method wrapped so an exception can never kill obsws-python's event thread."""
+        def wrap(name, fn):
+            def handler(d):
+                try:
+                    fn(d)
+                except Exception as e:
+                    self.last_error = f"{name}: {type(e).__name__}: {e}"
+            handler.__name__ = name
+            return handler
+        return [wrap(n, getattr(self, n)) for n in dir(self) if n.startswith("on_")]
+
+    def on_input_volume_meters(self, d):
+        self.meter_events += 1
+        now = time.monotonic()
+        if now - self._last_meter < 0.05:       # OBS sends ~50/s; forward at most 20/s (the UI interpolates between them)
+            return
+        self._last_meter = now
+        self._emit("meters", dict(levels={i["inputName"]: peak_from_levels(i.get("inputLevelsMul")) for i in d.inputs}))
     def on_record_state_changed(self, d): self._emit("record", dict(active=d.output_active, state=d.output_state, path=getattr(d, "output_path", None)))
     def on_stream_state_changed(self, d): self._emit("stream", dict(active=d.output_active, state=d.output_state))
     def on_replay_buffer_state_changed(self, d): self._emit("replay_state", dict(active=d.output_active))

@@ -6,13 +6,14 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, QSize, QUrl, Sig
 from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap, QKeySequence, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSlider, QVBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMenu, QPushButton, QScrollArea, QSlider, QVBoxLayout,
                                QWidget, QToolButton, QListView)
 
 from core import gallery
 from core.config import Settings, data_dir
-from .common import FG_DIM, icon, tool_button
+from . import dialogs
+from .common import FG_DIM, SeekSlider, icon, tool_button
 
 CACHE = data_dir() / "thumbs"
 
@@ -112,7 +113,7 @@ def pix_for(store: MediaStore, m: gallery.Media, size: int) -> QPixmap:
 
 
 def do_rename(parent, store: MediaStore, path: str):
-    stem, ok = QInputDialog.getText(parent, "Rename", "New name (without extension):", text=Path(path).stem)
+    stem, ok = dialogs.ask_text(parent, "Rename", "New name (without extension):", Path(path).stem)
     if not ok or not stem.strip(): return
     try:
         new = gallery.rename(path, stem.strip())
@@ -120,16 +121,16 @@ def do_rename(parent, store: MediaStore, path: str):
             store.cfg["favorites"].remove(path); store.cfg["favorites"].append(new); store.cfg.save()
         store.rescan()
     except Exception as e:
-        QMessageBox.warning(parent, "Rename failed", str(e))
+        dialogs.message(parent, "Rename failed", str(e))
 
 
 def do_delete(parent, store: MediaStore, path: str):
-    if QMessageBox.question(parent, "Delete", f"Delete '{Path(path).name}'?\nIt will be moved to the recycle bin when possible.") != QMessageBox.Yes:
+    if not dialogs.confirm(parent, "Delete", f"Delete '{Path(path).name}'?\nIt will be moved to the recycle bin when possible.", danger=True):
         return
     try:
         gallery.delete(path); store.forget(path)
     except Exception as e:
-        QMessageBox.warning(parent, "Delete failed", str(e))
+        dialogs.message(parent, "Delete failed", str(e))
 
 
 def show_media_menu(parent, store: MediaStore, path: str, global_pos, open_cb):
@@ -157,18 +158,32 @@ class ImageViewer(QDialog):
         pm = QPixmap(path)
         lab.setPixmap(pm.scaled(880, 520, Qt.KeepAspectRatio, Qt.SmoothTransformation)) if not pm.isNull() else lab.setText("Cannot load image")
         lay.addWidget(lab)
+        dialogs.prepare_dialog(self)             # centered on the overlay's screen, clamped inside it
 
 
 class PlayerWindow(QWidget):
-    """Integrated player (Qt Multimedia). Codec support depends on the OS backend; errors are shown, with an external-player fallback."""
+    """Integrated player (Qt Multimedia). Codec support depends on the OS backend.
+
+    Stability rules (root causes of the old "reload / restart" behaviour):
+      * one long-lived QMediaPlayer; the source is only set when a DIFFERENT file is opened or while recovering;
+      * re-opening the same clip never resets the source or the position;
+      * "restart from 0" only happens at a real EndOfMedia, never from a duration/position heuristic;
+      * a partially written (still growing) file is re-loaded at the last position instead of restarting;
+      * closing the window pauses (keeps source + position) instead of stop();
+      * errors show a Retry button that resumes from the last position."""
+    MAX_RECOVERIES = 5
+
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Window)
         self.setWindowTitle("OBS Overlay - Player"); self.resize(960, 600); self.path = ""
+        self._pos = 0; self._resume = None; self._recoveries = 0; self._size_seen = 0
         self.audio = QAudioOutput(); self.player = QMediaPlayer(self); self.player.setAudioOutput(self.audio)
         self.video = QVideoWidget(); self.player.setVideoOutput(self.video)
         self.info = QLabel(); self.info.setObjectName("dim"); self.err = QLabel(); self.err.setStyleSheet("color:#ff7b7b")
         self.err.setWordWrap(True); self.err.hide()
-        self.play = tool_button("play", "Play / Pause (Space)"); self.seek = QSlider(Qt.Horizontal)
+        self.state_lab = QLabel(); self.state_lab.setObjectName("dim"); self.state_lab.hide()
+        self.retry = QPushButton("Retry from last position"); self.retry.hide()
+        self.play = tool_button("play", "Play / Pause (Space)"); self.seek = SeekSlider(Qt.Horizontal)
         self.time = QLabel("00:00 / 00:00"); self.vol = QSlider(Qt.Horizontal); self.vol.setRange(0, 100); self.vol.setValue(80)
         self.vol.setFixedWidth(90); self.audio.setVolume(0.8)
         self.mute = tool_button("volume-high", "Mute (M)", True)
@@ -180,33 +195,88 @@ class PlayerWindow(QWidget):
         for w in (self.play, back, fwd): bar.addWidget(w)
         bar.addWidget(self.seek, 1); bar.addWidget(self.time); bar.addWidget(self.mute); bar.addWidget(self.vol)
         bar.addWidget(self.speed); bar.addWidget(self.loop); bar.addWidget(full); bar.addWidget(ext)
-        lay = QVBoxLayout(self); lay.addWidget(self.video, 1); lay.addWidget(self.err); lay.addLayout(bar); lay.addWidget(self.info)
+        lay = QVBoxLayout(self); lay.addWidget(self.video, 1); lay.addWidget(self.state_lab); lay.addWidget(self.err)
+        lay.addWidget(self.retry); lay.addLayout(bar); lay.addWidget(self.info)
         self.play.clicked.connect(self.toggle)
         self.seek.sliderMoved.connect(self.player.setPosition)
         self.vol.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
         self.mute.toggled.connect(self.audio.setMuted)
         self.speed.currentIndexChanged.connect(lambda: self.player.setPlaybackRate(self.speed.currentData()))
+        self.loop.toggled.connect(lambda on: self.player.setLoops(-1 if on else 1))      # Qt loops internally, no manual restart
         back.clicked.connect(lambda: self.step(-1)); fwd.clicked.connect(lambda: self.step(1))
         full.clicked.connect(self.toggle_full); ext.clicked.connect(lambda: self.path and gallery.open_external(self.path))
+        self.retry.clicked.connect(lambda: self._recover(self._pos))
         self.player.durationChanged.connect(lambda d: (self.seek.setRange(0, d), self._t()))
-        self.player.positionChanged.connect(lambda p: (self.seek.setValue(p) if not self.seek.isSliderDown() else None, self._t()))
+        self.player.positionChanged.connect(self._on_position)
         self.player.playbackStateChanged.connect(lambda s: self.play.setIcon(icon("pause" if s == QMediaPlayer.PlayingState else "play")))
         self.player.mediaStatusChanged.connect(self._status)
-        self.player.errorOccurred.connect(lambda e, msg: (self.err.setText(f"Playback error: {msg}. This codec may be unsupported - use 'Open externally'."), self.err.show()))
+        self.player.errorOccurred.connect(self._error)
         for key, fn in (("Space", self.toggle), ("Left", lambda: self.jump(-5000)), ("Right", lambda: self.jump(5000)), ("F", self.toggle_full),
                         ("M", self.mute.toggle), ("L", self.loop.toggle), (",", lambda: self.step(-1)), (".", lambda: self.step(1)), ("Esc", self.on_esc)):
             QShortcut(QKeySequence(key), self, activated=fn)
 
+    # ---- opening / recovery ---------------------------------------------------
     def open(self, path):
-        self.path = path; self.err.hide(); self.setWindowTitle(Path(path).name)
-        st = os.stat(path)
+        M = QMediaPlayer
+        same = path == self.path and self.player.mediaStatus() not in (M.NoMedia, M.InvalidMedia)
+        self.show(); self.raise_(); self.activateWindow()
+        if same:                                   # same clip: keep source and position, just make sure it plays
+            if self.player.playbackState() != M.PlayingState: self.player.play()
+            return
+        try:
+            st = os.stat(path)
+        except OSError as e:
+            self.err.setText(f"Cannot open file: {e.strerror}"); self.err.show(); return
+        self.path = path; self.err.hide(); self.retry.hide(); self._pos = 0; self._resume = None
+        self._recoveries = 0; self._size_seen = st.st_size
+        self.setWindowTitle(Path(path).name)
         self.info.setText(f"{Path(path).name}  -  {gallery.fmt_size(st.st_size)}  -  {path}")
-        self.player.setSource(QUrl.fromLocalFile(path)); self.show(); self.raise_(); self.activateWindow(); self.player.play()
+        self.player.setSource(QUrl.fromLocalFile(path)); self.player.play()
 
+    def _recover(self, pos: int):
+        """Re-load the same file and continue at `pos` (used for partial / still-growing files and after errors)."""
+        if not self.path: return
+        self._resume = max(0, int(pos)); self.err.hide(); self.retry.hide()
+        self.player.setSource(QUrl()); self.player.setSource(QUrl.fromLocalFile(self.path))   # empty first: forces a real reload
+
+    def _file_grew(self) -> bool:
+        try:
+            size = os.stat(self.path).st_size
+        except OSError:
+            return False
+        grew = size > self._size_seen + 1024
+        self._size_seen = max(self._size_seen, size)
+        return grew
+
+    def _status(self, s):
+        M = QMediaPlayer
+        if s in (M.LoadingMedia, M.StalledMedia, M.BufferingMedia):
+            self.state_lab.setText("Loading..." if s == M.LoadingMedia else "Buffering..."); self.state_lab.show()
+        else:
+            self.state_lab.hide()
+        if s in (M.LoadedMedia, M.BufferedMedia) and self._resume is not None:
+            pos, self._resume = self._resume, None
+            self.player.setPosition(pos); self.player.play()
+        elif s == M.EndOfMedia and self._file_grew() and self._recoveries < self.MAX_RECOVERIES:
+            self._recoveries += 1                                   # file was still being written: continue, don't restart
+            self.state_lab.setText("Waiting for the rest of the file..."); self.state_lab.show()
+            QTimer.singleShot(600, lambda: self._recover(self._pos))
+
+    def _error(self, _err, msg):
+        self.err.setText(f"Playback error: {msg}. The codec may be unsupported - use 'Open externally'.")
+        self.err.show(); self.retry.show()
+        if self._file_grew() and self._recoveries < self.MAX_RECOVERIES:
+            self._recoveries += 1
+            QTimer.singleShot(800, lambda: self._recover(self._pos))
+
+    # ---- controls -------------------------------------------------------------
     def toggle(self):
-        if self.player.playbackState() != QMediaPlayer.PlayingState and self.player.duration() and self.player.position() >= self.player.duration() - 80:
-            self.player.setPosition(0)                      # replay from the start after the end
-        self.player.pause() if self.player.playbackState() == QMediaPlayer.PlayingState else self.player.play()
+        M = QMediaPlayer
+        if self.player.playbackState() == M.PlayingState:
+            self.player.pause(); return
+        if self.player.mediaStatus() == M.EndOfMedia:               # only a REAL end restarts the clip
+            self.player.setPosition(0)
+        self.player.play()
 
     def jump(self, ms): self.player.setPosition(max(0, self.player.position() + ms))
 
@@ -216,16 +286,18 @@ class PlayerWindow(QWidget):
     def toggle_full(self): self.showNormal() if self.isFullScreen() else self.showFullScreen()
     def on_esc(self): self.showNormal() if self.isFullScreen() else None
 
-    def _status(self, s):
-        if s == QMediaPlayer.EndOfMedia and self.loop.isChecked():
-            self.player.setPosition(0); self.player.play()
+    def _on_position(self, p):
+        if self._resume is None: self._pos = p
+        if not self.seek.isSliderDown(): self.seek.setValue(p)
+        self._t()
 
     def _t(self):
         f = lambda ms: gallery.fmt_duration(ms / 1000)
         self.time.setText(f"{f(self.player.position())} / {f(self.player.duration())}")
 
     def closeEvent(self, e):
-        self.player.stop(); e.accept()
+        self.player.pause()                         # keep source + position; reopening the same clip resumes
+        e.accept()
 
 
 class GalleryWindow(QWidget):
