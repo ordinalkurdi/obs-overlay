@@ -10,6 +10,10 @@ from pathlib import Path
 from .audio import peak_from_levels
 
 AUDIO_KIND_HINTS = ("wasapi", "pulse", "alsa", "coreaudio", "audio")
+# Other source types that can carry audio (OBS lists them in its mixer when "control audio via OBS" is on). They are
+# reported with audio_flag=False; the overlay keeps only those that OBS actually sends level meters for.
+MAYBE_AUDIO_KINDS = ("browser_source", "ffmpeg_source", "vlc_source", "game_capture", "dshow_input", "av_capture_input",
+                     "v4l2_input", "decklink", "ndi_source", "window_capture", "slideshow")
 
 
 class BackendError(Exception):
@@ -145,7 +149,8 @@ class ObsBackend:
             special = None
         for i in r.get_input_list().inputs:
             kind = i.get("inputKind", "")
-            if not any(h in kind for h in AUDIO_KIND_HINTS):
+            flagged = any(h in kind for h in AUDIO_KIND_HINTS)
+            if not flagged and not any(h in kind for h in MAYBE_AUDIO_KINDS):
                 continue
             n = i["inputName"]
             try:
@@ -153,7 +158,11 @@ class ObsBackend:
                 db = r.get_input_volume(n).input_volume_db
             except Exception:
                 continue
-            d["inputs"].append(dict(name=n, kind=kind, muted=muted, db=db))
+            try:                                   # OBS shows "Inactive" for sources that are not live in the program scene
+                active = bool(r.get_source_active(n).video_active)
+            except Exception:
+                active = True
+            d["inputs"].append(dict(name=n, kind=kind, muted=muted, db=db, active=active, audio_flag=flagged))
         names = [x["name"] for x in d["inputs"]]
         mic = getattr(special, "mic1", None) if special else None
         desk = getattr(special, "desktop1", None) if special else None

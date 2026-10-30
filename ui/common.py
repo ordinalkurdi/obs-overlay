@@ -72,8 +72,8 @@ class Row(QFrame):
     """Compact NVIDIA-style row: icon, title + dim subtitle, optional right-hand widget or chevron."""
     clicked = Signal()
 
-    def __init__(self, icon_name: str, title: str, subtitle: str = "", chevron=True, tooltip: str = ""):
-        super().__init__()
+    def __init__(self, icon_name: str, title: str, subtitle: str = "", chevron=True, tooltip: str = "", parent=None):
+        super().__init__(parent)
         self.setObjectName("row"); self.setFocusPolicy(Qt.StrongFocus); self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_StyledBackground, True)
         lay = QHBoxLayout(self); lay.setContentsMargins(12, 0, 12, 0); lay.setSpacing(12)

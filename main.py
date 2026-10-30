@@ -15,6 +15,8 @@ from ui import dialogs
 from ui.common import stylesheet
 from ui.gallery_view import GalleryWindow, ImageViewer, MediaStore, PlayerWindow
 from ui.overlay import Overlay
+from ui.layout_edit import LayoutEditor
+from ui.layout_presets import PresetController
 from ui.widgets_dock import WidgetManager, WidgetsPage
 from ui.settings import SettingsDialog
 
@@ -36,7 +38,9 @@ class App:
         self.hk = HotkeyManager()
         self.overlay = Overlay(self.svc, self.store, self.hint)
         dialogs.set_screen_provider(self.overlay._screen)       # popups/notifications appear centered on the overlay's monitor
-        self.widgets = WidgetManager(self.svc); self.widgets_page = WidgetsPage(self.widgets)
+        self.widgets = WidgetManager(self.svc)
+        self.presets = PresetController(self.widgets, self.svc); self.editor = LayoutEditor(self.widgets, self.presets)
+        self.widgets_page = WidgetsPage(self.widgets, self.presets, self.editor)
         self.overlay.set_widgets_page(self.widgets_page)
         self.player = PlayerWindow(); self.gallery = GalleryWindow(self.store); self.overlay.set_gallery(self.gallery)
         self._wire(); self._tray()
@@ -70,6 +74,7 @@ class App:
         o.open_settings.connect(self.show_settings); o.gal_row.clicked.connect(self.show_gallery)
         o.strip.activated.connect(self.open_media); self.gallery.open_media.connect(self.open_media)
         o.stat_row.clicked.connect(self.show_widgets); s.state_changed.connect(self.widgets.refresh)
+        self.widgets.edit_mode_changed.connect(lambda on: o.hide_panel() if on and not self.cfg["pinned"] else None)   # get the panel out of the way
         s.media_created.connect(lambda _p: self.store.rescan())
         self.hk.triggered.connect(self.on_hotkey)
 
@@ -77,6 +82,7 @@ class App:
         self.tray = QSystemTrayIcon(app_icon(), self.qt); self.tray.setToolTip("OBS Overlay")
         m = QMenu(); m.addAction("Show / hide overlay", self.overlay.toggle_visible); m.addAction("Gallery", self.show_gallery)
         m.addAction("Settings", self.show_settings)
+        m.addAction("Edit widget layout", self.editor.toggle)
         m.addAction("Widgets: turn off click-through", lambda: self.widgets.set_click_through_all(False)); m.addSeparator(); m.addAction("Quit", self.qt.quit)
         self.tray.setContextMenu(m); self.tray.activated.connect(lambda r: self.overlay.toggle_visible() if r == QSystemTrayIcon.Trigger else None)
         self.tray.show()
@@ -85,7 +91,8 @@ class App:
         s, o = self.svc, self.overlay
         {"toggle_overlay": o.toggle_visible, "record": o._rec_clicked, "replay_toggle": s.toggle_replay, "replay_save": s.save_replay,
          "screenshot": s.screenshot, "mic_mute": lambda: s.toggle_mute_role("mic"), "desktop_mute": lambda: s.toggle_mute_role("desktop"),
-         "stats": self.toggle_stats, "widgets_click": self.widgets.toggle_click_through_all}[a]()
+         "stats": self.toggle_stats, "widgets_click": self.widgets.toggle_click_through_all,
+         "layout_edit": self.editor.toggle}[a]()
 
     def toggle_stats(self):
         self.cfg["stats_visible"] = not self.cfg["stats_visible"]; self.cfg.save(); self.widgets.apply(); self.svc.refresh(); self.overlay.sync()

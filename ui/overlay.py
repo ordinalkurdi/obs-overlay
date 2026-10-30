@@ -69,6 +69,9 @@ class StatsPanel(QWidget):
         self.move(x, y)
 
 
+GRAY_SLIDER = "QSlider::sub-page:horizontal { background: #5a5a5a; } QSlider::handle:horizontal { background: #8a8a8a; }"
+
+
 class LevelBar(QWidget):
     """Smooth audio level bar (OBS-style green/yellow/red) with a peak-hold marker. Animated by the overlay's meter timer."""
     def __init__(self):
@@ -163,7 +166,7 @@ class Overlay(QWidget):
                 (E.LeftEdge | E.BottomEdge, C.SizeBDiagCursor, "bl")]
         self.grips = {k: Grip(self, ed, cur) for ed, cur, k in spec}
         self.pin.setChecked(bool(self.cfg["pinned"]))
-        self.apply_settings(); self.sync(); self.prev_row.set_texts(sub=self._preview_sub())
+        self.apply_settings(); self._restore_sections(); self.sync(); self.prev_row.set_texts(sub=self._preview_sub())
 
     # ---- UI ----------------------------------------------------------------
     def _build(self):
@@ -444,8 +447,20 @@ class Overlay(QWidget):
 
     def toggle_stream_hotkey(self): self._live_clicked()
 
+    def _restore_sections(self):
+        """Preview / Sources / Audio come back open or closed exactly as they were left."""
+        self._preview_on = bool(self.cfg["ui_preview_open"]); self.prev_lab.setVisible(self._preview_on)
+        self.prev_row.set_right_icon("chevron-down" if self._preview_on else "chevron-right", FG_DIM)
+        self.srcbox.setVisible(bool(self.cfg["ui_sources_open"]))
+        self.src_row.set_right_icon("chevron-down" if self.cfg["ui_sources_open"] else "chevron-right", FG_DIM)
+        self.mixer.setVisible(bool(self.cfg["ui_audio_open"]))
+        self.mix.set_right_icon("chevron-down" if self.cfg["ui_audio_open"] else "chevron-right", FG_DIM)
+
+    def _remember(self, key: str, value: bool):
+        if self.cfg[key] != value: self.cfg[key] = value; self.cfg.save()
+
     def _toggle_preview(self):
-        self._preview_on = not self._preview_on; self.prev_lab.setVisible(self._preview_on)
+        self._preview_on = not self._preview_on; self.prev_lab.setVisible(self._preview_on); self._remember("ui_preview_open", self._preview_on)
         if self._preview_on:
             self.prev_row.set_right_icon("chevron-down"); self.svc.request_preview()
             self.pv.start(self._preview_interval())
@@ -453,8 +468,9 @@ class Overlay(QWidget):
             self.prev_row.set_right_icon("chevron-right"); self.pv.stop()
 
     def _toggle_sources(self):
-        self.srcbox.setVisible(not self.srcbox.isVisible())
-        self.src_row.set_right_icon("chevron-down" if self.srcbox.isVisible() else "chevron-right", FG_DIM)
+        on = self.srcbox.isHidden()                       # isHidden, not isVisible: must also work while the panel is hidden
+        self.srcbox.setVisible(on); self._remember("ui_sources_open", on)
+        self.src_row.set_right_icon("chevron-down" if on else "chevron-right", FG_DIM)
 
     def _sources(self, items):
         sig = tuple((i["id"], i["name"], i["enabled"], i["locked"]) for i in items)
@@ -528,7 +544,7 @@ class Overlay(QWidget):
         self.stat_row.set_texts(sub=("On" if self.cfg["stats_visible"] else "Off") + " - floating stats and web docks")
         items = s.get("items", []); self._sources(items)
         self.src_row.set_texts(sub=f"{len(items)} in '{s.get('scene', '')}'" if ok else "Not connected")
-        self.src_row.set_right_icon("chevron-down" if self.srcbox.isVisible() else "chevron-right", FG_DIM)
+        self.src_row.set_right_icon("chevron-down" if not self.srcbox.isHidden() else "chevron-right", FG_DIM)
         self.pause.setVisible(bool(rec)); self.pause.setEnabled(ok)
         self.pause.set_texts("Resume recording" if s.get("paused") else "Pause recording", "Pauses the OBS recording file")
         vc = s.get("vcam")
@@ -559,8 +575,9 @@ class Overlay(QWidget):
         self.rec.set_texts(sub=self._rec_sub()); self.live.set_texts(sub=self._stream_sub())
 
     def _toggle_mixer(self):
-        self.mixer.setVisible(not self.mixer.isVisible())
-        self.mix.set_right_icon("chevron-down" if self.mixer.isVisible() else "chevron-right", FG_DIM)
+        on = self.mixer.isHidden()
+        self.mixer.setVisible(on); self._remember("ui_audio_open", on)
+        self.mix.set_right_icon("chevron-down" if on else "chevron-right", FG_DIM)
 
     def _mute_clicked(self, name):
         # Always toggle from the REAL OBS state (not from a local flag) so the control can never desynchronize.
@@ -574,7 +591,15 @@ class Overlay(QWidget):
         m.addAction("Auto-detect microphone / desktop", lambda: (self.svc.set_role("mic", ""), self.svc.set_role("desktop", "")))
         m.exec(pos)
 
+    def _shown_inputs(self, inputs):
+        """Sources that really carry audio: capture devices always; other source types (browser, media, game...) only once
+        OBS reports level meters for them. Before any meter data has arrived they are shown so nothing seems missing."""
+        levels = self.svc.meters if self.cfg["audio_detect"] else {}
+        if not levels: return list(inputs)
+        return [i for i in inputs if i.get("audio_flag", True) or i["name"] in levels]
+
     def _mixer(self, inputs):
+        inputs = self._shown_inputs(inputs)
         sig = tuple(i["name"] for i in inputs)
         if getattr(self, "_mix_sig", None) != sig:
             while self.ml.count():
@@ -598,7 +623,7 @@ class Overlay(QWidget):
                 sl.valueChanged.connect(lambda val, nm=n: self.svc.set_volume_db(nm, float(val)))
                 mute.clicked.connect(lambda _=False, nm=n: self._mute_clicked(nm))
                 bv.addLayout(head); bv.addWidget(bar); bv.addWidget(sl); self.ml.addWidget(box)
-                self._rows[n] = dict(mute=mute, dot=dot, name=name, bar=bar, slider=sl, active_until=0.0, lit=False)
+                self._rows[n] = dict(mute=mute, dot=dot, name=name, bar=bar, slider=sl, active_until=0.0, lit=False, inactive=None)
             self._mix_sig = sig
         s = self.svc.snap
         for i in inputs:
@@ -609,8 +634,13 @@ class Overlay(QWidget):
             r["mute"].setToolTip("Unmute" if muted else "Mute"); r["mute"].setAccessibleName(r["mute"].toolTip())
             tags = [t for t in ("mic", "desktop") if s.get(t) == i["name"]]
             r["name"].setText(i["name"] + (f"  ({', '.join(tags)})" if tags else ""))
-            r["name"].setStyleSheet("color:#6f6f6f;" if muted else "")
+            inactive = not i.get("active", True)
+            r["name"].setStyleSheet("color:#6f6f6f;" if (muted or inactive) else "")
             sl = r["slider"]
+            if r["inactive"] != inactive:                  # gray slider for sources that are not live in the program scene
+                r["inactive"] = inactive
+                sl.setStyleSheet(GRAY_SLIDER if inactive else "")
+                sl.setToolTip("Volume (dB) - inactive: not live in the current scene" if inactive else "Volume (dB)")
             if not sl.isSliderDown():
                 sl.blockSignals(True); sl.setValue(int(max(-60, min(0, i["db"])))); sl.blockSignals(False)
         self._update_meters()
@@ -621,6 +651,11 @@ class Overlay(QWidget):
         if not rows or not self.isVisible(): return
         on = bool(self.cfg["audio_detect"]) and self.svc.status == "connected"
         levels, now = self.svc.meters, time.monotonic()
+        known = frozenset(levels)
+        if known != getattr(self, "_meter_names", None):         # OBS told us which sources really have audio: refresh the list
+            first = getattr(self, "_meter_names", None) is None
+            self._meter_names = known
+            if self.svc.snap.get("inputs") and (not first or known): self._mixer(self.svc.snap["inputs"]); rows = self._rows
         for n, r in rows.items():
             r["bar"].setVisible(on); r["dot"].setVisible(on)
             if not on: continue

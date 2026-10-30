@@ -28,6 +28,7 @@ HOTKEY_LABELS = {
     "desktop_mute": "Toggle desktop audio mute",
     "stats": "Show / hide floating widgets",
     "widgets_click": "Toggle click-through for all widgets",
+    "layout_edit": "Edit widget layout (drag, presets)",
 }
 
 DEFAULTS: dict = {
@@ -78,6 +79,11 @@ DEFAULTS: dict = {
     "preview_width": 320,
     "stats_visible": False,        # master switch for all floating widgets
     "widgets": [],                 # list of widget dicts (see ui/widgets_dock.py)
+    "ui_preview_open": False,      # main window sections stay open / closed across restarts
+    "ui_sources_open": False,
+    "ui_audio_open": True,
+    "layout_presets": [],          # saved widget layouts (see core/layouts.py)
+    "active_preset": "",           # id of the preset last loaded / saved
     "stats_metrics": ["recording", "streaming", "bitrate", "dropped", "resolution", "fps",
                       "cpu", "memory", "replay", "connection"],
     "stats_interval_ms": 1000,
@@ -90,6 +96,7 @@ DEFAULTS: dict = {
         "toggle_overlay": "Alt+Z", "record": "Alt+F9", "replay_toggle": "Alt+Shift+F10",
         "replay_save": "Alt+F10", "screenshot": "Alt+F1", "mic_mute": "Ctrl+Alt+M",
         "desktop_mute": "Ctrl+Alt+D", "stats": "Alt+R", "widgets_click": "Alt+Shift+W",
+        "layout_edit": "Alt+Shift+L",
     },
 }
 
